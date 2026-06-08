@@ -1,6 +1,7 @@
 import hashlib
 import os
 import json
+import tempfile
 from pathlib import Path
 
 
@@ -25,8 +26,32 @@ class PasswordManager:
         return {}
 
     def _save_passwords(self) -> None:
-        with open(self.storage_path, "w", encoding="utf-8") as f:
-            json.dump(self._passwords, f, indent=2)
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=str(self.storage_path.parent),
+            suffix=".tmp"
+        )
+        try:
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                json.dump(self._passwords, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            if os.name == "nt":
+                try:
+                    os.replace(temp_path, str(self.storage_path))
+                except OSError:
+                    if os.path.exists(str(self.storage_path)):
+                        os.unlink(str(self.storage_path))
+                    os.rename(temp_path, str(self.storage_path))
+            else:
+                os.replace(temp_path, str(self.storage_path))
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            raise
 
     def _hash_password(self, password: str, salt: bytes) -> str:
         dk = hashlib.pbkdf2_hmac(

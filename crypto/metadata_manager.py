@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -51,8 +52,7 @@ class MetadataManager:
         }
 
         meta_path = self._get_metadata_path(encrypted_path)
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2, ensure_ascii=False)
+        self._safe_write_json(meta_path, metadata)
 
     def load_metadata(self, encrypted_path: str) -> Optional[Dict[str, Any]]:
         meta_path = self._get_metadata_path(encrypted_path)
@@ -80,6 +80,33 @@ class MetadataManager:
             meta_path.unlink()
             return True
         return False
+
+    def _safe_write_json(self, file_path: Path, data: Dict[str, Any]) -> None:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=str(file_path.parent),
+            suffix=".tmp"
+        )
+        try:
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            if os.name == "nt":
+                try:
+                    os.replace(temp_path, str(file_path))
+                except OSError:
+                    os.unlink(str(file_path))
+                    os.rename(temp_path, str(file_path))
+            else:
+                os.replace(temp_path, str(file_path))
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            raise
 
     def list_all_metadata(self) -> list:
         metadata_list = []

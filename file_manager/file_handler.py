@@ -1,15 +1,17 @@
 import os
 from pathlib import Path
 from typing import List, Tuple, Optional
-from crypto import AESCrypto, MetadataManager
+from crypto import AESCrypto, MetadataManager, PasswordManager
 
 
 class FileHandler:
     ENCRYPTED_EXT = ".enc"
 
     def __init__(self, password: str):
+        self.password = password
         self.crypto = AESCrypto(password)
         self.metadata_manager = MetadataManager()
+        self.password_manager = PasswordManager()
 
     def encrypt_file(self, input_path: str, output_path: Optional[str] = None) -> str:
         input_path = str(Path(input_path).resolve())
@@ -29,6 +31,9 @@ class FileHandler:
             original_size=original_size,
             password_hash=password_hash,
         )
+
+        file_id = PasswordManager.generate_file_id(output_path)
+        self.password_manager.set_password(file_id, self.password)
 
         return output_path
 

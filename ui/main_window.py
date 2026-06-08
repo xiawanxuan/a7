@@ -28,7 +28,7 @@ from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtGui import QIcon, QFont
 
 from file_manager import BatchProcessor, FolderBatchProcessor, ProcessStatus
-from crypto import MetadataManager
+from crypto import MetadataManager, AppDataManager
 
 
 class MainWindow(QMainWindow):
@@ -41,29 +41,49 @@ class MainWindow(QMainWindow):
         self.folder_paths: List[str] = []
         self.batch_processor = None
         self.metadata_manager = MetadataManager()
+        self.app_data = AppDataManager()
 
         self._init_ui()
         self._apply_styles()
+        self._load_app_config()
+
+    def _setup_dpi_scaling(self):
+        screen = self.screen()
+        if screen:
+            self._dpi_scale = screen.devicePixelRatio()
+        else:
+            self._dpi_scale = 1.0
+        if self._dpi_scale < 1.0:
+            self._dpi_scale = 1.0
+
+    def _scale(self, value: int) -> int:
+        return int(value * self._dpi_scale)
+
+    def _scale_font(self, point_size: int) -> int:
+        base = int(point_size * self._dpi_scale)
+        return max(base, point_size)
 
     def _init_ui(self):
+        self._setup_dpi_scaling()
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(15)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(self._scale(15))
+        main_layout.setContentsMargins(self._scale(20), self._scale(20), self._scale(20), self._scale(20))
 
         title_label = QLabel("文件加密解密工具")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_font = QFont()
-        title_font.setPointSize(20)
+        title_font.setPointSize(self._scale_font(20))
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setStyleSheet("color: #2c3e50; margin-bottom: 10px;")
+        title_label.setStyleSheet(f"color: #2c3e50; margin-bottom: {self._scale(10)}px;")
         main_layout.addWidget(title_label)
 
         subtitle_label = QLabel("基于 AES-256 算法的安全文件加密")
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle_label.setStyleSheet("color: #7f8c8d; margin-bottom: 10px;")
+        subtitle_label.setStyleSheet(f"color: #7f8c8d; margin-bottom: {self._scale(10)}px;")
         main_layout.addWidget(subtitle_label)
 
         self.tab_widget = QTabWidget()
@@ -79,7 +99,7 @@ class MainWindow(QMainWindow):
     def _init_encrypt_tab(self):
         encrypt_tab = QWidget()
         layout = QVBoxLayout(encrypt_tab)
-        layout.setSpacing(15)
+        layout.setSpacing(self._scale(15))
 
         password_group = QGroupBox("加密设置")
         password_layout = QFormLayout(password_group)
@@ -87,12 +107,12 @@ class MainWindow(QMainWindow):
         self.encrypt_password = QLineEdit()
         self.encrypt_password.setEchoMode(QLineEdit.EchoMode.Password)
         self.encrypt_password.setPlaceholderText("请输入加密密码...")
-        self.encrypt_password.setMinimumHeight(35)
+        self.encrypt_password.setMinimumHeight(self._scale(35))
 
         self.encrypt_confirm = QLineEdit()
         self.encrypt_confirm.setEchoMode(QLineEdit.EchoMode.Password)
         self.encrypt_confirm.setPlaceholderText("请再次输入密码...")
-        self.encrypt_confirm.setMinimumHeight(35)
+        self.encrypt_confirm.setMinimumHeight(self._scale(35))
 
         self.show_password_check = QCheckBox("显示密码")
         self.show_password_check.stateChanged.connect(self._toggle_password_visibility)
@@ -163,27 +183,28 @@ class MainWindow(QMainWindow):
         output_layout.addStretch()
 
         splitter.addWidget(output_section)
-        splitter.setSizes([500, 300])
+        splitter.setSizes([self._scale(500), self._scale(300)])
 
         layout.addWidget(splitter, 1)
 
         encrypt_btn = QPushButton("开始加密")
-        encrypt_btn.setMinimumHeight(45)
+        encrypt_btn.setMinimumHeight(self._scale(45))
+        btn_font_size = self._scale_font(16)
         encrypt_btn.setStyleSheet(
-            """
-            QPushButton {
+            f"""
+            QPushButton {{
                 background-color: #3498db;
                 color: white;
-                font-size: 16px;
+                font-size: {btn_font_size}px;
                 font-weight: bold;
-                border-radius: 8px;
-            }
-            QPushButton:hover {
+                border-radius: {self._scale(8)}px;
+            }}
+            QPushButton:hover {{
                 background-color: #2980b9;
-            }
-            QPushButton:pressed {
+            }}
+            QPushButton:pressed {{
                 background-color: #217dbb;
-            }
+            }}
         """
         )
         encrypt_btn.clicked.connect(self._start_encryption)
@@ -194,7 +215,7 @@ class MainWindow(QMainWindow):
     def _init_decrypt_tab(self):
         decrypt_tab = QWidget()
         layout = QVBoxLayout(decrypt_tab)
-        layout.setSpacing(15)
+        layout.setSpacing(self._scale(15))
 
         password_group = QGroupBox("解密设置")
         password_layout = QFormLayout(password_group)
@@ -202,7 +223,7 @@ class MainWindow(QMainWindow):
         self.decrypt_password = QLineEdit()
         self.decrypt_password.setEchoMode(QLineEdit.EchoMode.Password)
         self.decrypt_password.setPlaceholderText("请输入解密密码...")
-        self.decrypt_password.setMinimumHeight(35)
+        self.decrypt_password.setMinimumHeight(self._scale(35))
 
         self.show_decrypt_check = QCheckBox("显示密码")
         self.show_decrypt_check.stateChanged.connect(self._toggle_decrypt_password)
@@ -241,22 +262,23 @@ class MainWindow(QMainWindow):
         layout.addWidget(file_section, 1)
 
         decrypt_btn = QPushButton("开始解密")
-        decrypt_btn.setMinimumHeight(45)
+        decrypt_btn.setMinimumHeight(self._scale(45))
+        decrypt_btn_font_size = self._scale_font(16)
         decrypt_btn.setStyleSheet(
-            """
-            QPushButton {
+            f"""
+            QPushButton {{
                 background-color: #27ae60;
                 color: white;
-                font-size: 16px;
+                font-size: {decrypt_btn_font_size}px;
                 font-weight: bold;
-                border-radius: 8px;
-            }
-            QPushButton:hover {
+                border-radius: {self._scale(8)}px;
+            }}
+            QPushButton:hover {{
                 background-color: #229954;
-            }
-            QPushButton:pressed {
+            }}
+            QPushButton:pressed {{
                 background-color: #1e8449;
-            }
+            }}
         """
         )
         decrypt_btn.clicked.connect(self._start_decryption)
@@ -309,7 +331,7 @@ class MainWindow(QMainWindow):
         detail_layout.addWidget(self.metadata_detail, 1)
 
         splitter.addWidget(detail_widget)
-        splitter.setSizes([300, 500])
+        splitter.setSizes([self._scale(300), self._scale(500)])
 
         layout.addWidget(splitter, 1)
 
@@ -326,18 +348,18 @@ class MainWindow(QMainWindow):
         progress_layout.addWidget(self.current_file_label)
 
         self.progress_bar = QProgressBar()
-        self.progress_bar.setMinimumHeight(25)
+        self.progress_bar.setMinimumHeight(self._scale(25))
         self.progress_bar.setStyleSheet(
-            """
-            QProgressBar {
-                border: 2px solid #bdc3c7;
-                border-radius: 5px;
+            f"""
+            QProgressBar {{
+                border: {self._scale(2)}px solid #bdc3c7;
+                border-radius: {self._scale(5)}px;
                 text-align: center;
-            }
-            QProgressBar::chunk {
+            }}
+            QProgressBar::chunk {{
                 background-color: #3498db;
-                border-radius: 3px;
-            }
+                border-radius: {self._scale(3)}px;
+            }}
         """
         )
         progress_layout.addWidget(self.progress_bar)
@@ -355,80 +377,81 @@ class MainWindow(QMainWindow):
         progress_layout.addLayout(status_layout)
 
     def _apply_styles(self):
+        s = self._scale
         self.setStyleSheet(
-            """
-            QMainWindow {
+            f"""
+            QMainWindow {{
                 background-color: #ecf0f1;
-            }
-            QGroupBox {
+            }}
+            QGroupBox {{
                 font-weight: bold;
-                border: 2px solid #bdc3c7;
-                border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 10px;
+                border: {s(2)}px solid #bdc3c7;
+                border-radius: {s(8)}px;
+                margin-top: {s(10)}px;
+                padding-top: {s(10)}px;
                 background-color: white;
-            }
-            QGroupBox::title {
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
+                left: {s(10)}px;
+                padding: 0 {s(5)}px;
                 color: #2c3e50;
-            }
-            QPushButton {
+            }}
+            QPushButton {{
                 background-color: #95a5a6;
                 color: white;
                 border: none;
-                padding: 8px 16px;
-                border-radius: 5px;
-                min-height: 25px;
-            }
-            QPushButton:hover {
+                padding: {s(8)}px {s(16)}px;
+                border-radius: {s(5)}px;
+                min-height: {s(25)}px;
+            }}
+            QPushButton:hover {{
                 background-color: #7f8c8d;
-            }
-            QPushButton:pressed {
+            }}
+            QPushButton:pressed {{
                 background-color: #6c7a7b;
-            }
-            QPushButton:disabled {
+            }}
+            QPushButton:disabled {{
                 background-color: #bdc3c7;
-            }
-            QLineEdit {
-                border: 2px solid #bdc3c7;
-                border-radius: 5px;
-                padding: 5px 10px;
+            }}
+            QLineEdit {{
+                border: {s(2)}px solid #bdc3c7;
+                border-radius: {s(5)}px;
+                padding: {s(5)}px {s(10)}px;
                 background-color: white;
-            }
-            QLineEdit:focus {
+            }}
+            QLineEdit:focus {{
                 border-color: #3498db;
-            }
-            QListWidget {
-                border: 2px solid #bdc3c7;
-                border-radius: 5px;
+            }}
+            QListWidget {{
+                border: {s(2)}px solid #bdc3c7;
+                border-radius: {s(5)}px;
                 background-color: white;
-            }
-            QTabWidget::pane {
-                border: 2px solid #bdc3c7;
-                border-radius: 8px;
+            }}
+            QTabWidget::pane {{
+                border: {s(2)}px solid #bdc3c7;
+                border-radius: {s(8)}px;
                 top: -1px;
                 background-color: white;
-            }
-            QTabBar::tab {
+            }}
+            QTabBar::tab {{
                 background-color: #d5dbdb;
-                border: 2px solid #bdc3c7;
+                border: {s(2)}px solid #bdc3c7;
                 border-bottom: none;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                padding: 8px 20px;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
+                border-top-left-radius: {s(8)}px;
+                border-top-right-radius: {s(8)}px;
+                padding: {s(8)}px {s(20)}px;
+                margin-right: {s(2)}px;
+            }}
+            QTabBar::tab:selected {{
                 background-color: white;
                 color: #2c3e50;
-            }
-            QTextEdit {
-                border: 2px solid #bdc3c7;
-                border-radius: 5px;
+            }}
+            QTextEdit {{
+                border: {s(2)}px solid #bdc3c7;
+                border-radius: {s(5)}px;
                 background-color: white;
-            }
+            }}
         """
         )
 
@@ -651,6 +674,38 @@ class MainWindow(QMainWindow):
             self.status_label.setText("正在取消...")
             self.cancel_btn.setEnabled(False)
 
+    def _load_app_config(self):
+        config = self.app_data
+        output_same = config.get_config("output_same_dir", True)
+        self.output_same_check.setChecked(output_same)
+        self.output_dir_edit.setEnabled(not output_same)
+        self.output_dir_btn.setEnabled(not output_same)
+
+        output_dir = config.get_config("output_dir", "")
+        if output_dir:
+            self.output_dir_edit.setText(output_dir)
+
+        show_pwd = config.get_config("show_password", False)
+        if show_pwd:
+            self.show_password_check.setChecked(True)
+            self.show_decrypt_check.setChecked(True)
+            self.encrypt_password.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.encrypt_confirm.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.decrypt_password.setEchoMode(QLineEdit.EchoMode.Normal)
+
+        geometry = config.get_config("window_geometry")
+        if geometry:
+            from PyQt6.QtCore import QByteArray
+            self.restoreGeometry(QByteArray.fromHex(geometry.encode()))
+
+    def _save_app_config(self):
+        self.app_data.set_config("output_same_dir", self.output_same_check.isChecked())
+        self.app_data.set_config("output_dir", self.output_dir_edit.text())
+        self.app_data.set_config("show_password", self.show_password_check.isChecked())
+        self.app_data.set_config(
+            "window_geometry", bytes(self.saveGeometry().toHex()).decode()
+        )
+
     def closeEvent(self, event):
         if self.batch_processor and self.batch_processor.isRunning():
             reply = QMessageBox.question(
@@ -662,8 +717,10 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.StandardButton.Yes:
                 self.batch_processor.cancel()
                 self.batch_processor.wait()
+                self._save_app_config()
                 event.accept()
             else:
                 event.ignore()
         else:
+            self._save_app_config()
             event.accept()
