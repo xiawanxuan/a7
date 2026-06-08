@@ -1,19 +1,23 @@
 import os
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 from crypto import AESCrypto, MetadataManager, PasswordManager
+from .version_manager import VersionManager
 
 
 class FileHandler:
     ENCRYPTED_EXT = ".enc"
 
-    def __init__(self, password: str):
+    def __init__(self, password: str, enable_versioning: bool = True):
         self.password = password
         self.crypto = AESCrypto(password)
         self.metadata_manager = MetadataManager()
         self.password_manager = PasswordManager()
+        self.enable_versioning = enable_versioning
+        self.version_manager = VersionManager() if enable_versioning else None
 
-    def encrypt_file(self, input_path: str, output_path: Optional[str] = None) -> str:
+    def encrypt_file(self, input_path: str, output_path: Optional[str] = None,
+                     save_version: bool = True, version_description: str = "") -> str:
         input_path = str(Path(input_path).resolve())
 
         if output_path is None:
@@ -34,6 +38,16 @@ class FileHandler:
 
         file_id = PasswordManager.generate_file_id(output_path)
         self.password_manager.set_password(file_id, self.password)
+
+        if self.enable_versioning and save_version and self.version_manager:
+            try:
+                self.version_manager.save_version(
+                    original_path=input_path,
+                    encrypted_path=output_path,
+                    description=version_description,
+                )
+            except Exception:
+                pass
 
         return output_path
 
@@ -134,3 +148,45 @@ class FileHandler:
             if os.path.isfile(path):
                 total += os.path.getsize(path)
         return total
+
+    def get_versions(self, original_path: str) -> List[Dict[str, Any]]:
+        if not self.version_manager:
+            return []
+        return self.version_manager.get_versions(original_path)
+
+    def restore_version(self, original_path: str, version_id: str,
+                       output_path: Optional[str] = None) -> Optional[str]:
+        if not self.version_manager:
+            return None
+        return self.version_manager.restore_version(original_path, version_id, output_path)
+
+    def restore_and_decrypt_version(self, original_path: str, version_id: str,
+                                    output_path: Optional[str] = None) -> Optional[str]:
+        if not self.version_manager:
+            return None
+
+        version_enc = self.version_manager.restore_version(original_path, version_id)
+        if version_enc is None:
+            return None
+
+        if output_path is None:
+            base = Path(original_path)
+            output_path = str(base.with_name(
+                f"{base.stem}_v{version_id}{base.suffix}"
+            ))
+
+        try:
+            self.decrypt_file(version_enc, output_path)
+            if os.path.exists(version_enc) and version_enc != output_path:
+                try:
+                    os.unlink(version_enc)
+                except OSError:
+                    pass
+            return output_path
+        except Exception:
+            if os.path.exists(version_enc):
+                try:
+                    os.unlink(version_enc)
+                except OSError:
+                    pass
+            return None

@@ -28,6 +28,7 @@ from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtGui import QIcon, QFont
 
 from file_manager import BatchProcessor, FolderBatchProcessor, ProcessStatus
+from file_manager import VersionManager, CloudSyncManager, ShareManager, SyncStatus
 from crypto import MetadataManager, AppDataManager
 
 
@@ -42,6 +43,9 @@ class MainWindow(QMainWindow):
         self.batch_processor = None
         self.metadata_manager = MetadataManager()
         self.app_data = AppDataManager()
+        self.version_manager = VersionManager()
+        self.cloud_sync = CloudSyncManager()
+        self.share_manager = ShareManager()
 
         self._init_ui()
         self._apply_styles()
@@ -337,7 +341,592 @@ class MainWindow(QMainWindow):
 
         self.tab_widget.addTab(metadata_tab, "元数据管理")
 
+        self._init_version_tab()
+        self._init_cloud_tab()
+        self._init_share_tab()
+
         self._refresh_metadata_list()
+
+    def _init_version_tab(self):
+        version_tab = QWidget()
+        layout = QVBoxLayout(version_tab)
+        layout.setSpacing(self._scale(10))
+
+        select_layout = QHBoxLayout()
+        self.version_file_edit = QLineEdit()
+        self.version_file_edit.setPlaceholderText("选择加密文件查看历史版本...")
+        self.version_file_edit.setMinimumHeight(self._scale(30))
+        select_btn = QPushButton("选择文件")
+        select_btn.clicked.connect(self._select_version_file)
+        refresh_btn = QPushButton("刷新")
+        refresh_btn.clicked.connect(self._refresh_version_list)
+        select_layout.addWidget(self.version_file_edit, 1)
+        select_layout.addWidget(select_btn)
+        select_layout.addWidget(refresh_btn)
+        layout.addLayout(select_layout)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        list_widget = QWidget()
+        list_layout = QVBoxLayout(list_widget)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+
+        list_label = QLabel("版本列表")
+        list_label.setStyleSheet("font-weight: bold; color: #34495e;")
+        list_layout.addWidget(list_label)
+
+        self.version_list = QListWidget()
+        self.version_list.itemClicked.connect(self._show_version_detail)
+        list_layout.addWidget(self.version_list, 1)
+
+        btn_layout = QHBoxLayout()
+        restore_btn = QPushButton("恢复此版本")
+        restore_btn.clicked.connect(self._restore_version)
+        delete_btn = QPushButton("删除此版本")
+        delete_btn.clicked.connect(self._delete_version)
+        btn_layout.addWidget(restore_btn)
+        btn_layout.addWidget(delete_btn)
+        list_layout.addLayout(btn_layout)
+
+        splitter.addWidget(list_widget)
+
+        detail_widget = QWidget()
+        detail_layout = QVBoxLayout(detail_widget)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+
+        detail_label = QLabel("版本详情")
+        detail_label.setStyleSheet("font-weight: bold; color: #34495e;")
+        detail_layout.addWidget(detail_label)
+
+        self.version_detail = QTextEdit()
+        self.version_detail.setReadOnly(True)
+        detail_layout.addWidget(self.version_detail, 1)
+
+        splitter.addWidget(detail_widget)
+        splitter.setSizes([self._scale(350), self._scale(450)])
+
+        layout.addWidget(splitter, 1)
+
+        self.tab_widget.addTab(version_tab, "版本管理")
+
+    def _select_version_file(self):
+        file, _ = QFileDialog.getOpenFileName(
+            self, "选择加密文件", "", "加密文件 (*.enc);;所有文件 (*.*)"
+        )
+        if file:
+            self.version_file_edit.setText(file)
+            self._refresh_version_list()
+
+    def _refresh_version_list(self):
+        self.version_list.clear()
+        file_path = self.version_file_edit.text().strip()
+        if not file_path or not os.path.exists(file_path):
+            metadata_list = self.version_manager.list_all_versioned_files()
+            for info in metadata_list:
+                item = QListWidgetItem(f"{info['original_name']} ({info['version_count']}个版本)")
+                item.setData(Qt.ItemDataRole.UserRole, info["original_path"])
+                self.version_list.addItem(item)
+            return
+
+        versions = self.version_manager.get_versions(file_path)
+        for v in versions:
+            item = QListWidgetItem(f"{v['timestamp']} - {v.get('description', '无描述')}")
+            item.setData(Qt.ItemDataRole.UserRole, v["version_id"])
+            item.setData(Qt.ItemDataRole.UserRole + 1, file_path)
+            self.version_list.addItem(item)
+
+    def _show_version_detail(self, item):
+        version_id = item.data(Qt.ItemDataRole.UserRole)
+        file_path = item.data(Qt.ItemDataRole.UserRole + 1)
+
+        if file_path is None:
+            file_path = version_id
+            versions = self.version_manager.get_versions(file_path)
+            if versions:
+                latest = versions[0]
+                self._display_version_detail(latest)
+        else:
+            versions = self.version_manager.get_versions(file_path)
+            for v in versions:
+                if v["version_id"] == version_id:
+                    self._display_version_detail(v)
+                    break
+
+    def _display_version_detail(self, version_info):
+        mm = self.metadata_manager
+        text = f"""版本信息
+{'=' * 50}
+版本ID: {version_info.get('version_id', 'N/A')}
+创建时间: {version_info.get('timestamp', 'N/A')}
+原始文件名: {version_info.get('original_name', 'N/A')}
+原始文件大小: {mm.format_size(version_info.get('original_size', 0))}
+加密后大小: {mm.format_size(version_info.get('encrypted_size', 0))}
+描述: {version_info.get('description', '无')}
+版本文件: {version_info.get('version_file', 'N/A')}
+"""
+        self.version_detail.setText(text)
+
+    def _restore_version(self):
+        current_item = self.version_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "提示", "请先选择要恢复的版本")
+            return
+
+        version_id = current_item.data(Qt.ItemDataRole.UserRole)
+        file_path = current_item.data(Qt.ItemDataRole.UserRole + 1)
+
+        if file_path is None:
+            QMessageBox.warning(self, "提示", "请先选择具体文件")
+            return
+
+        password, ok = self._input_password("请输入解密密码以恢复版本")
+        if not ok or not password:
+            return
+
+        output_path, _ = QFileDialog.getSaveFileName(
+            self, "选择恢复文件保存位置",
+            f"{Path(file_path).stem}_v{version_id}{Path(file_path).suffix}",
+            "所有文件 (*.*)"
+        )
+        if not output_path:
+            return
+
+        try:
+            from file_manager import FileHandler
+            handler = FileHandler(password)
+            result = handler.restore_and_decrypt_version(file_path, version_id, output_path)
+            if result:
+                QMessageBox.information(self, "成功", f"版本恢复成功！\n文件已保存到: {output_path}")
+            else:
+                QMessageBox.warning(self, "失败", "版本恢复失败，请检查密码是否正确")
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"恢复失败: {str(e)}")
+
+    def _delete_version(self):
+        current_item = self.version_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "提示", "请先选择要删除的版本")
+            return
+
+        version_id = current_item.data(Qt.ItemDataRole.UserRole)
+        file_path = current_item.data(Qt.ItemDataRole.UserRole + 1)
+
+        if file_path is None:
+            QMessageBox.warning(self, "提示", "请先选择具体文件")
+            return
+
+        reply = QMessageBox.question(
+            self, "确认删除",
+            "确定要删除这个版本吗？此操作不可撤销。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.version_manager.delete_version(file_path, version_id):
+                self._refresh_version_list()
+                self.version_detail.clear()
+                QMessageBox.information(self, "成功", "版本已删除")
+            else:
+                QMessageBox.warning(self, "失败", "删除版本失败")
+
+    def _input_password(self, title: str):
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setMinimumWidth(self._scale(300))
+
+        layout = QVBoxLayout(dialog)
+        password_edit = QLineEdit()
+        password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        password_edit.setPlaceholderText("请输入密码...")
+        password_edit.setMinimumHeight(self._scale(30))
+        layout.addWidget(password_edit)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        result = dialog.exec()
+        if result == QDialog.DialogCode.Accepted:
+            return password_edit.text(), True
+        return "", False
+
+    def _init_cloud_tab(self):
+        cloud_tab = QWidget()
+        layout = QVBoxLayout(cloud_tab)
+        layout.setSpacing(self._scale(10))
+
+        header_layout = QHBoxLayout()
+        status_label = QLabel(f"云存储提供方: {self.cloud_sync.get_provider_name()}")
+        status_label.setStyleSheet("color: #34495e; font-weight: bold;")
+        header_layout.addWidget(status_label)
+        header_layout.addStretch()
+        refresh_btn = QPushButton("刷新状态")
+        refresh_btn.clicked.connect(self._refresh_cloud_list)
+        header_layout.addWidget(refresh_btn)
+        layout.addLayout(header_layout)
+
+        file_list_group = QGroupBox("同步文件列表")
+        file_layout = QVBoxLayout(file_list_group)
+
+        self.cloud_file_list = QListWidget()
+        file_layout.addWidget(self.cloud_file_list, 1)
+
+        btn_layout = QHBoxLayout()
+        add_btn = QPushButton("添加同步文件")
+        add_btn.clicked.connect(self._add_cloud_sync_file)
+        upload_btn = QPushButton("上传选中")
+        upload_btn.clicked.connect(self._upload_selected)
+        download_btn = QPushButton("下载选中")
+        download_btn.clicked.connect(self._download_selected)
+        remove_btn = QPushButton("移除同步")
+        remove_btn.clicked.connect(self._remove_cloud_sync)
+        for btn in [add_btn, upload_btn, download_btn, remove_btn]:
+            btn_layout.addWidget(btn)
+        file_layout.addLayout(btn_layout)
+
+        layout.addWidget(file_list_group, 1)
+
+        self.cloud_progress = QProgressBar()
+        self.cloud_progress.setMinimumHeight(self._scale(20))
+        layout.addWidget(self.cloud_progress)
+
+        self.cloud_status_label = QLabel("就绪")
+        self.cloud_status_label.setStyleSheet("color: #7f8c8d;")
+        layout.addWidget(self.cloud_status_label)
+
+        self.tab_widget.addTab(cloud_tab, "云同步")
+
+        self._refresh_cloud_list()
+
+    def _refresh_cloud_list(self):
+        self.cloud_file_list.clear()
+        sync_files = self.cloud_sync.list_sync_files()
+        for info in sync_files:
+            status_text = self._get_sync_status_text(info["sync_status"])
+            item_text = f"{info['file_name']}  -  {status_text}"
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.ItemDataRole.UserRole, info["local_path"])
+            if info["sync_status"] == "synced":
+                item.setForeground(Qt.GlobalColor.darkGreen)
+            elif info["sync_status"] in ["local_newer", "only_local"]:
+                item.setForeground(Qt.GlobalColor.darkBlue)
+            elif info["sync_status"] in ["cloud_newer", "only_cloud"]:
+                item.setForeground(Qt.GlobalColor.darkYellow)
+            elif info["sync_status"] == "conflict":
+                item.setForeground(Qt.GlobalColor.red)
+            self.cloud_file_list.addItem(item)
+
+    def _get_sync_status_text(self, status: str) -> str:
+        status_map = {
+            "synced": "已同步",
+            "local_newer": "本地较新",
+            "cloud_newer": "云端较新",
+            "conflict": "冲突",
+            "only_local": "仅本地",
+            "only_cloud": "仅云端",
+            "unknown": "未知",
+        }
+        return status_map.get(status, status)
+
+    def _add_cloud_sync_file(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "选择要同步的加密文件", "", "加密文件 (*.enc);;所有文件 (*.*)"
+        )
+        if files:
+            for f in files:
+                self.cloud_sync.add_sync_file(f)
+            self._refresh_cloud_list()
+            QMessageBox.information(self, "成功", f"已添加 {len(files)} 个文件到同步列表")
+
+    def _upload_selected(self):
+        items = self.cloud_file_list.selectedItems()
+        if not items:
+            QMessageBox.warning(self, "提示", "请先选择要上传的文件")
+            return
+
+        self.cloud_progress.setMaximum(len(items))
+        self.cloud_progress.setValue(0)
+
+        success_count = 0
+        for i, item in enumerate(items):
+            local_path = item.data(Qt.ItemDataRole.UserRole)
+            self.cloud_status_label.setText(f"正在上传: {os.path.basename(local_path)}")
+            if self.cloud_sync.upload(local_path):
+                success_count += 1
+            self.cloud_progress.setValue(i + 1)
+
+        self.cloud_status_label.setText(f"上传完成: 成功 {success_count}/{len(items)}")
+        self._refresh_cloud_list()
+
+    def _download_selected(self):
+        items = self.cloud_file_list.selectedItems()
+        if not items:
+            QMessageBox.warning(self, "提示", "请先选择要下载的文件")
+            return
+
+        self.cloud_progress.setMaximum(len(items))
+        self.cloud_progress.setValue(0)
+
+        success_count = 0
+        for i, item in enumerate(items):
+            local_path = item.data(Qt.ItemDataRole.UserRole)
+            self.cloud_status_label.setText(f"正在下载: {os.path.basename(local_path)}")
+            if self.cloud_sync.download(local_path):
+                success_count += 1
+            self.cloud_progress.setValue(i + 1)
+
+        self.cloud_status_label.setText(f"下载完成: 成功 {success_count}/{len(items)}")
+        self._refresh_cloud_list()
+
+    def _remove_cloud_sync(self):
+        items = self.cloud_file_list.selectedItems()
+        if not items:
+            QMessageBox.warning(self, "提示", "请先选择要移除的文件")
+            return
+
+        reply = QMessageBox.question(
+            self, "确认移除",
+            f"确定要从同步列表中移除 {len(items)} 个文件吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            for item in items:
+                local_path = item.data(Qt.ItemDataRole.UserRole)
+                self.cloud_sync.remove_sync_file(local_path)
+            self._refresh_cloud_list()
+
+    def _init_share_tab(self):
+        share_tab = QWidget()
+        layout = QVBoxLayout(share_tab)
+        layout.setSpacing(self._scale(10))
+
+        create_group = QGroupBox("创建分享")
+        create_layout = QFormLayout(create_group)
+
+        self.share_file_edit = QLineEdit()
+        self.share_file_edit.setPlaceholderText("选择要分享的加密文件...")
+        self.share_file_edit.setMinimumHeight(self._scale(30))
+        select_share_btn = QPushButton("选择文件")
+        select_share_btn.clicked.connect(self._select_share_file)
+        file_layout = QHBoxLayout()
+        file_layout.addWidget(self.share_file_edit, 1)
+        file_layout.addWidget(select_share_btn)
+
+        self.share_expiry_combo = QComboBox()
+        self.share_expiry_combo.addItems(["1小时", "24小时", "7天", "30天", "永久"])
+
+        self.share_desc_edit = QLineEdit()
+        self.share_desc_edit.setPlaceholderText("分享描述（可选）...")
+
+        create_share_btn = QPushButton("创建分享链接")
+        create_share_btn.setMinimumHeight(self._scale(35))
+        create_share_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: #9b59b6;
+                color: white;
+                font-weight: bold;
+                border-radius: {self._scale(5)}px;
+            }}
+            QPushButton:hover {{
+                background-color: #8e44ad;
+            }}
+            """
+        )
+        create_share_btn.clicked.connect(self._create_share)
+
+        create_layout.addRow("文件:", file_layout)
+        create_layout.addRow("有效期:", self.share_expiry_combo)
+        create_layout.addRow("描述:", self.share_desc_edit)
+        create_layout.addRow("", create_share_btn)
+
+        layout.addWidget(create_group)
+
+        shares_group = QGroupBox("我的分享")
+        shares_layout = QVBoxLayout(shares_group)
+
+        self.share_list = QListWidget()
+        self.share_list.itemClicked.connect(self._show_share_detail)
+        shares_layout.addWidget(self.share_list, 1)
+
+        btn_layout = QHBoxLayout()
+        copy_link_btn = QPushButton("复制链接")
+        copy_link_btn.clicked.connect(self._copy_share_link)
+        export_btn = QPushButton("导出分享文件")
+        export_btn.clicked.connect(self._export_share_file)
+        revoke_btn = QPushButton("撤销分享")
+        revoke_btn.clicked.connect(self._revoke_share)
+        refresh_btn = QPushButton("刷新")
+        refresh_btn.clicked.connect(self._refresh_share_list)
+        for btn in [copy_link_btn, export_btn, revoke_btn, refresh_btn]:
+            btn_layout.addWidget(btn)
+        shares_layout.addLayout(btn_layout)
+
+        layout.addWidget(shares_group, 1)
+
+        detail_group = QGroupBox("分享详情")
+        detail_layout = QVBoxLayout(detail_group)
+        self.share_detail = QTextEdit()
+        self.share_detail.setReadOnly(True)
+        self.share_detail.setMaximumHeight(self._scale(120))
+        detail_layout.addWidget(self.share_detail)
+        layout.addWidget(detail_group)
+
+        self.tab_widget.addTab(share_tab, "安全分享")
+
+        self._refresh_share_list()
+
+    def _select_share_file(self):
+        file, _ = QFileDialog.getOpenFileName(
+            self, "选择要分享的加密文件", "", "加密文件 (*.enc);;所有文件 (*.*)"
+        )
+        if file:
+            self.share_file_edit.setText(file)
+
+    def _get_expiry_hours(self, text: str) -> int:
+        mapping = {
+            "1小时": 1,
+            "24小时": 24,
+            "7天": 7 * 24,
+            "30天": 30 * 24,
+            "永久": 87600,
+        }
+        return mapping.get(text, 24)
+
+    def _create_share(self):
+        file_path = self.share_file_edit.text().strip()
+        if not file_path or not os.path.exists(file_path):
+            QMessageBox.warning(self, "提示", "请选择要分享的加密文件")
+            return
+
+        expiry_text = self.share_expiry_combo.currentText()
+        expiry_hours = self._get_expiry_hours(expiry_text)
+        description = self.share_desc_edit.text().strip()
+
+        try:
+            result = self.share_manager.create_share(
+                encrypted_file_path=file_path,
+                expiry_hours=expiry_hours,
+                description=description,
+            )
+
+            detail_text = f"""分享创建成功！
+{'=' * 40}
+分享ID: {result['share_id']}
+分享密码: {result['share_password']}
+文件名: {result['original_name']}
+文件大小: {self.metadata_manager.format_size(result['original_size'])}
+有效期: {expiry_text}
+过期时间: {result['expires_at']}
+分享链接: {self.share_manager.get_share_link(result['share_id'])}
+
+⚠️  请妥善保管分享密码，接收方需要密码才能解密文件
+"""
+            self.share_detail.setText(detail_text)
+
+            self._refresh_share_list()
+            QMessageBox.information(self, "成功", "分享创建成功！")
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"创建分享失败: {str(e)}")
+
+    def _refresh_share_list(self):
+        self.share_list.clear()
+        shares = self.share_manager.list_shares(include_expired=True)
+        for share in shares:
+            is_active = share.get("is_active", True) and not self._is_share_expired(share)
+            status_text = "有效" if is_active else "已过期/撤销"
+            text = f"{share['original_name']}  -  {status_text}"
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, share["share_id"])
+            if not is_active:
+                item.setForeground(Qt.GlobalColor.gray)
+            self.share_list.addItem(item)
+
+    def _is_share_expired(self, share: dict) -> bool:
+        from datetime import datetime
+        try:
+            expires_at = datetime.fromisoformat(share["expires_at"])
+            return datetime.now() > expires_at
+        except Exception:
+            return False
+
+    def _show_share_detail(self, item):
+        share_id = item.data(Qt.ItemDataRole.UserRole)
+        share = self.share_manager.get_share_info(share_id)
+        if share:
+            is_active = share.get("is_active", True)
+            status_text = "有效" if is_active else "已撤销"
+            text = f"""分享ID: {share['share_id']}
+文件名: {share['original_name']}
+文件大小: {self.metadata_manager.format_size(share['original_size'])}
+创建时间: {share['created_at']}
+过期时间: {share['expires_at']}
+下载次数: {share.get('download_count', 0)}
+状态: {status_text}
+描述: {share.get('description', '无')}
+"""
+            self.share_detail.setText(text)
+
+    def _copy_share_link(self):
+        current_item = self.share_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "提示", "请先选择一个分享")
+            return
+
+        share_id = current_item.data(Qt.ItemDataRole.UserRole)
+        share = self.share_manager.get_share_info(share_id)
+        if not share:
+            return
+
+        from PyQt6.QtGui import QClipboard
+        link = self.share_manager.get_share_link(share_id)
+        QApplication.clipboard().setText(link)
+        QMessageBox.information(self, "成功", "分享链接已复制到剪贴板")
+
+    def _export_share_file(self):
+        current_item = self.share_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "提示", "请先选择一个分享")
+            return
+
+        share_id = current_item.data(Qt.ItemDataRole.UserRole)
+        share = self.share_manager.get_share_info(share_id)
+        if not share:
+            return
+
+        output_path, _ = QFileDialog.getSaveFileName(
+            self, "导出分享文件", f"{share['original_name']}.share",
+            "分享文件 (*.share);;所有文件 (*.*)"
+        )
+        if output_path:
+            if self.share_manager.export_share_file(share_id, output_path):
+                QMessageBox.information(self, "成功", f"分享文件已导出到: {output_path}")
+            else:
+                QMessageBox.warning(self, "失败", "导出分享文件失败")
+
+    def _revoke_share(self):
+        current_item = self.share_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "提示", "请先选择一个分享")
+            return
+
+        reply = QMessageBox.question(
+            self, "确认撤销",
+            "确定要撤销这个分享吗？撤销后将无法再使用。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            share_id = current_item.data(Qt.ItemDataRole.UserRole)
+            if self.share_manager.revoke_share(share_id):
+                self._refresh_share_list()
+                self.share_detail.clear()
+                QMessageBox.information(self, "成功", "分享已撤销")
+            else:
+                QMessageBox.warning(self, "失败", "撤销分享失败")
 
     def _init_progress_section(self):
         self.progress_group = QGroupBox("处理进度")
